@@ -1,15 +1,20 @@
 import time
 
+import pytest
+
 from locations.hours import (
+    CLOSED_FR,
     CLOSED_IT,
     DAYS,
     DAYS_BG,
     DAYS_DE,
     DAYS_ES,
+    DAYS_FR,
     DAYS_IT,
     DAYS_PL,
     DAYS_RU,
     DELIMITERS_ES,
+    DELIMITERS_FR,
     DELIMITERS_IT,
     DELIMITERS_RU,
     NAMED_DAY_RANGES_IT,
@@ -384,6 +389,129 @@ def test_add_ranges_from_string():
         CLOSED_IT,
     )
     assert o.as_opening_hours() == "Mo-Fr 09:00-13:00,15:00-19:30; Sa 09:00-19:30; Su 10:00-13:00,15:00-19:30"
+
+
+# Real French opening-hours strings collected from spiders that each grew their own
+# opening-hours regex (elephant_bleu, kookai_fr, mma_fr, les_cherubins_fr,
+# la_taverne_table_de_caractere_fr). They are recorded here as the spec for
+# improving the shared French handling in locations.hours, so spiders never need
+# their own parsers. Each tuple is (source string, expected as_opening_hours(), id).
+
+# Strings the shared French handling already parses correctly - regression guards
+# for the core work.
+FRENCH_HOURS_SUPPORTED = [
+    ("Le samedi : 10 à 20h", "Sa 10:00-20:00", "kookai-bare-hour-before-a"),
+    ("Lundi : 07:30 - 18:30", "Mo 07:30-18:30", "cherubins-single-day"),
+    ("Dimanche : fermé", "Su closed", "kookai-closed-day"),
+]
+
+# Strings the shared French handling does NOT parse yet: each returns "" (no
+# ranges), a wrong result, or raises. The xfail markers are strict - when a case
+# starts parsing correctly, drop its marker in the same change.
+FRENCH_HOURS_CASES = [
+    # -- elephant_bleu (car-wash popups) --
+    # "always open" idioms: 24h/24 + 7j/7 / "non stop" -> Mo-Su 00:00-24:00
+    ("24h/24 7j/7", "Mo-Su 00:00-24:00", "always-24h-7j"),
+    ("24h / 24 ~ 7 jours / 7", "Mo-Su 00:00-24:00", "always-spaced-tilde"),
+    ("24/24 7/7", "Mo-Su 00:00-24:00", "always-bare"),
+    ("non stop", "Mo-Su 00:00-24:00", "always-non-stop"),
+    ("centre ouvert 7J/7 et 24H/24", "Mo-Su 00:00-24:00", "always-prose"),
+    ("24h / 24 - 7 jours / 7", "Mo-Su 00:00-24:00", "always-dash-raises-indexerror"),
+    # "7j/7" / "7 jours sur 7" as an all-week range around one time span
+    ("6h-22h ~ 7 jours / 7", "Mo-Su 06:00-22:00", "allweek-range-tilde"),
+    ("07h00-22h00 / 7 Jours sur 7", "Mo-Su 07:00-22:00", "allweek-range-slash"),
+    ("6h30-23h00 7J/7", "Mo-Su 06:30-23:00", "allweek-range-halfhour"),
+    ("7 jours sur 7 - 7 H-22H", "Mo-Su 07:00-22:00", "allweek-prose-raises-indexerror"),
+    # "tous les jours" as a named all-week range
+    ("Tous les jours de 7h à 21h", "Mo-Su 07:00-21:00", "tlj-de-a"),
+    ("de 6h à 22h30 tous les jours", "Mo-Su 06:00-22:30", "tlj-trailing"),
+    ("6h-22h tous les jours y compris les jours fériés", "Mo-Su 06:00-22:00", "tlj-range-prefix"),
+    # time span stated BEFORE the day range ("5h-21h du lu-sa, ...")
+    (
+        "7h-20h du lu-sa, 8h-18h dimanche et jours fériés",
+        "Mo-Sa 07:00-20:00; Su 08:00-18:00",
+        "range-first-lu-sa-plus-su",
+    ),
+    (
+        "5h-21h du lu-sa, 8h-21h le dimanche, fermé les jours fériés",
+        "Mo-Sa 05:00-21:00; Su 08:00-21:00",
+        "range-first-three-clauses",
+    ),
+    (
+        "7h-21h du lu-ve, 8h-19h sa, 12h-16h dimanche et jours fériés",
+        "Mo-Fr 07:00-21:00; Sa 08:00-19:00; Su 12:00-16:00",
+        "range-first-lu-ve-sa-su",
+    ),
+    # time span before day range, with an explicit "fermé <jour>" clause
+    (
+        "7h-22h du lu-sa, fermé dimanche et jours fériés",
+        "Mo-Sa 07:00-22:00; Su closed",
+        "range-first-ferme-sunday",
+    ),
+    ("07H00 - 20H00 fermée le dimanche", "Mo-Sa 07:00-20:00; Su closed", "range-only-ferme-sunday"),
+    # day range then "de Xh à Yh", bare "a" for "à", several day groups
+    (
+        "du lundi au samedi de 8h a 20 h dimanche de 9h a 12h",
+        "Mo-Sa 08:00-20:00; Su 09:00-12:00",
+        "de-a-two-groups",
+    ),
+    (
+        "8h30 à 19h du lundi au samedi, 8h30-12h30 dimanches et jours fériés",
+        "Mo-Sa 08:30-19:00; Su 08:30-12:30",
+        "range-first-then-du-lundi",
+    ),
+    # bare time span, no day mentioned -> assume the whole week
+    ("7h-20h", "Mo-Su 07:00-20:00", "bare-range-dash"),
+    ("07h00 / 22h00", "Mo-Su 07:00-22:00", "bare-range-slash"),
+    # explicit French day range, only the "9h30" time notation blocks it
+    ("Du lundi au dimanche de 07h00 - 21h00", "Mo-Su 07:00-21:00", "h-notation-lundi-dimanche"),
+    (
+        "Lu - Sa 07h00 - 20h00 / Dimanche et jours fériés 09h00 - 19h00",
+        "Mo-Sa 07:00-20:00; Su 09:00-19:00",
+        "h-notation-lu-sa-plus-dimanche",
+    ),
+    # -- kookai_fr (free-text rows) --
+    ("Du lundi au vendredi : 9h30 - 19h", "Mo-Fr 09:30-19:00", "kookai-h-notation-range"),
+    ("Lundi : 13h 14h 18h 19h", "Mo 13:00-14:00,18:00-19:00", "kookai-bare-hours-two-ranges"),
+    # -- mma_fr (per-day dict, spaced "HH h MM" slots) --
+    ("Lundi 08 h 00 - 12 h 00", "Mo 08:00-12:00", "mma-spaced-h"),
+    (
+        "Lundi 08 h 30 - 12 h 00 Lundi 14 h 00 - 18 h 00",
+        "Mo 08:30-12:00,14:00-18:00",
+        "mma-spaced-h-two-slots",
+    ),
+    # -- les_cherubins_fr (per-day rows, "et" day connector) --
+    ("Samedi et Dimanche : Fermé", "Sa-Su closed", "cherubins-et-connector-closed"),
+    # -- la_taverne_table_de_caractere_fr (Elementor widgets, "HHhMM" slots) --
+    ("Lundi 11h00 - 15h00 15h00 - 22h00", "Mo 11:00-15:00,15:00-22:00", "taverne-h-two-ranges"),
+    ("Lundi 12h00 - 15h00 15h00 - 00h00", "Mo 12:00-15:00,15:00-24:00", "taverne-h-midnight-close"),
+    ("Lundi 12h00 23h00", "Mo 12:00-23:00", "taverne-bare-pair-no-delimiter"),
+]
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [pytest.param(source, expected, id=test_id) for source, expected, test_id in FRENCH_HOURS_SUPPORTED]
+    + [
+        pytest.param(
+            source,
+            expected,
+            id=test_id,
+            marks=pytest.mark.xfail(strict=True, reason="shared French opening-hours handling not implemented yet"),
+        )
+        for source, expected, test_id in FRENCH_HOURS_CASES
+    ],
+)
+def test_add_ranges_from_string_french(source, expected):
+    o = OpeningHours()
+    o.add_ranges_from_string(
+        source,
+        days=DAYS_FR,
+        named_day_ranges={},  # TODO: pass NAMED_DAY_RANGES_FR once it exists ("tous les jours", "7j/7", ...)
+        delimiters=DELIMITERS_FR,
+        closed=CLOSED_FR,
+    )
+    assert o.as_opening_hours() == expected
 
 
 def test_oh_as_bool():
