@@ -15,7 +15,6 @@ NATIONAL_HOTLINE_DIGITS = "420212812811"
 class BenuCZSpider(SitemapSpider, StructuredDataSpider):
     name = "benu_cz"
     item_attributes = {"brand": "BENU", "brand_wikidata": "Q58170509"}
-    requires_proxy = True
     # Pharmacy pages do not follow a consistent URL pattern, so crawl the
     # entire page sitemap and rely on StructuredDataSpider filtering by
     # wanted_types to pick out only the pharmacy pages.
