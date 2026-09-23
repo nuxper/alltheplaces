@@ -19,7 +19,6 @@ class BurgerKingBRSpider(Spider):
     name = "burger_king_br"
     item_attributes = BURGER_KING_SHARED_ATTRIBUTES
     allowed_domains = ["www.burgerking.com.br"]
-    requires_proxy = True
 
     async def start(self) -> AsyncIterator[JsonRequest]:
         yield JsonRequest(
